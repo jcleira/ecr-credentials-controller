@@ -1,0 +1,7 @@
+domain: com.ederium.ecr-credentials-controller
+repo: github.com/jcleira/ecr-credentials-controller
+resources:
+- group: aws
+  kind: Registry
+  version: v1
+version: "2"

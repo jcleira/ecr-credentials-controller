@@ -1,0 +1,7 @@
+apiVersion: aws.com.ederium.ecr-credentials-controller/v1
+kind: Registry
+metadata:
+  name: registry-sample
+spec:
+  # Add fields here
+  foo: bar
