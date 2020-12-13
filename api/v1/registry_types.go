@@ -20,16 +20,23 @@ import (
 
 // RegistrySpec defines the desired state of Registry
 type RegistrySpec struct {
-	// AWS zone of the ECR Registry to refresh credentials.
-	AWSZone string `json:"awsZone,omitempty"`
+	// AWS zone for the ECR Registry.
+	AWSZone string `json:"awsZone"`
 
-	// AWSAccountSecret secret that contains the AWS account credentials.
-	AWSAccountSecret string `json:"awsAccountSecret,omitempty"`
+	// AWS Account Secret with valid AWS account credentials. The secret should
+	// contain:
+	// - "AWS_ACCESS_KEY_ID": With the AWS Account Access Key.
+	// - "AWS_SECRET_ACCESS_KEY": With the AWS Account Secret Access Key.
+	AWSAccountSecret string `json:"awsAccountSecret"`
 }
 
 // RegistryStatus defines the observed state of Registry
 type RegistryStatus struct {
-	Status bool `json:"active"`
+	// Is the current ECR secret valid for pulling images.
+	Valid bool `json:"active,omitempty"`
+
+	// Last time the ECR secret was refreshed.
+	LastRefreshTime *metav1.Time `json:"lastRefreshTime,omitempty"`
 }
 
 // +kubebuilder:object:root=true
