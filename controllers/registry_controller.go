@@ -44,7 +44,12 @@ func (r *RegistryReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
 	_ = context.Background()
 	_ = r.Log.WithValues("registry", req.NamespacedName)
 
-	// your logic here
+	var registry awsv1.Registry
+	if err := r.Get(ctx, req.NamespacedName, &registry); err != nil {
+		log.Error(err, "unable to fetch Registry")
+
+		return ctrl.Result, client.IgnoreNotFound(err)
+	}
 
 	return ctrl.Result{}, nil
 }
