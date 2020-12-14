@@ -1,6 +1,4 @@
 /*
-
-
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
 You may obtain a copy of the License at
@@ -20,22 +18,25 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-// EDIT THIS FILE!  THIS IS SCAFFOLDING FOR YOU TO OWN!
-// NOTE: json tags are required.  Any new fields you add must have json tags for the fields to be serialized.
-
 // RegistrySpec defines the desired state of Registry
 type RegistrySpec struct {
-	// INSERT ADDITIONAL SPEC FIELDS - desired state of cluster
-	// Important: Run "make" to regenerate code after modifying this file
+	// AWS zone for the ECR Registry.
+	AWSZone string `json:"awsZone"`
 
-	// Foo is an example field of Registry. Edit Registry_types.go to remove/update
-	Foo string `json:"foo,omitempty"`
+	// AWS Account Secret with valid AWS account credentials. The secret should
+	// contain:
+	// - "AWS_ACCESS_KEY_ID": With the AWS Account Access Key.
+	// - "AWS_SECRET_ACCESS_KEY": With the AWS Account Secret Access Key.
+	AWSAccountSecret string `json:"awsAccountSecret"`
 }
 
 // RegistryStatus defines the observed state of Registry
 type RegistryStatus struct {
-	// INSERT ADDITIONAL STATUS FIELD - define observed state of cluster
-	// Important: Run "make" to regenerate code after modifying this file
+	// Is the current ECR secret valid for pulling images.
+	Valid bool `json:"active,omitempty"`
+
+	// Last time the ECR secret was refreshed.
+	LastRefreshTime *metav1.Time `json:"lastRefreshTime,omitempty"`
 }
 
 // +kubebuilder:object:root=true
