@@ -18,8 +18,11 @@ package controllers
 
 import (
 	"context"
+	"time"
 
 	"github.com/go-logr/logr"
+	"gitlab.qonto.co/cbs/pkg/log"
+	kbatch "k8s.io/api/batch/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -49,6 +52,70 @@ func (r *RegistryReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
 		log.Error(err, "unable to fetch Registry")
 
 		return ctrl.Result, client.IgnoreNotFound(err)
+	}
+
+	var childJobs kbatch.JobList
+	if err := r.List(ctx,
+		&childJobs,
+		client.InNamespace(req.Namespace),
+		client.MatchingFields{jobOwnerKey: req.Name}); err != nil {
+		log.Error(err, "unable to list child Jobs")
+		return ctrl.Result{}, err
+	}
+
+	getScheduledTimeForJob := func(job *kbatch.Job) (*time.Time, error) {
+		timeRaw := job.Annotations[scheduledTimeAnnotation]
+		if len(timeRaw) == 0 {
+			return nil, nil
+		}
+
+		timeParsed, err := time.Parse(time.RFC3339, timeRaw)
+		if err != nil {
+			return nil, err
+		}
+		return &timeParsed, nil
+	}
+
+	var activeJobs, successfulJobs, failedJobs []*kbatch.Job
+	var mostRecentTime *time.Time
+
+	for i, job := range childJobs.Items {
+		_, finishedType := isJobFinished(&job)
+
+		switch finishedType {
+		case kbatch.JobFailed:
+			continue
+		case "":
+			activeJobs = append(activeJobs, &childJobs.Items[i])
+			successfulJobs = append(successfulJobs, &childJobs.Items[i])
+		}
+
+		scheduledTimeForJob, err := getScheduleTimeForJob(&job)
+		if err != nil {
+			log.Error(err, "unable to parse schedule time for child job", "job", &job)
+			continue
+		}
+
+		if scheduledTimeForJob != nil {
+			if mostRecentTime == nil {
+				mostRecentTime = scheduledTimeForJob
+			} else if mostRecentTime.Before(scheduledTimeForJob) {
+				mostRecentTime = scheduledTimeForJob
+			}
+		}
+	}
+
+	if mostRecentTime != nil {
+		registry.Status.LastRefreshTime = &metav1.Time{Time: *mostRecentTime}
+	} else {
+		registry.Status.LastRefreshTime = nil
+	}
+
+	registry.Status.Valid = false
+
+	if err := r.Status().Update(ctx, &cronJob); err != nil {
+		log.Error(err, "unable to update CronJob status")
+		return ctrl.Result{}, err
 	}
 
 	return ctrl.Result{}, nil
