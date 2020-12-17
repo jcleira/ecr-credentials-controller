@@ -21,8 +21,9 @@ import (
 	"time"
 
 	"github.com/go-logr/logr"
-	"gitlab.qonto.co/cbs/pkg/log"
-	kbatch "k8s.io/api/batch/v1"
+	batchv1 "k8s.io/api/batch/v1"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -35,8 +36,11 @@ type RegistryReconciler struct {
 	client.Client
 	Log    logr.Logger
 	Scheme *runtime.Scheme
-	Clock
 }
+
+var (
+	scheduledTimeAnnotation = "ecr-credentials-controller/scheduled-at"
+)
 
 // +kubebuilder:rbac:groups=aws.com.ederium.ecr-credentials-controller,resources=registries,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=aws.com.ederium.ecr-credentials-controller,resources=registries/status,verbs=get;update;patch
@@ -44,26 +48,37 @@ type RegistryReconciler struct {
 // +kubebuilder:rbac:groups=batch,resources=jobs/status,verbs=get
 
 func (r *RegistryReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
-	_ = context.Background()
-	_ = r.Log.WithValues("registry", req.NamespacedName)
+	ctx := context.Background()
+	log := r.Log.WithValues("registry", req.NamespacedName)
 
 	var registry awsv1.Registry
 	if err := r.Get(ctx, req.NamespacedName, &registry); err != nil {
 		log.Error(err, "unable to fetch Registry")
 
-		return ctrl.Result, client.IgnoreNotFound(err)
+		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
-	var childJobs kbatch.JobList
+	var childJobs batchv1.JobList
 	if err := r.List(ctx,
 		&childJobs,
 		client.InNamespace(req.Namespace),
-		client.MatchingFields{jobOwnerKey: req.Name}); err != nil {
+		client.MatchingFields{".metadata.controller": req.Name}); err != nil {
 		log.Error(err, "unable to list child Jobs")
 		return ctrl.Result{}, err
 	}
 
-	getScheduledTimeForJob := func(job *kbatch.Job) (*time.Time, error) {
+	isJobFinished := func(job *batchv1.Job) (bool, batchv1.JobConditionType) {
+		for _, c := range job.Status.Conditions {
+			if (c.Type == batchv1.JobComplete || c.Type == batchv1.JobFailed) &&
+				c.Status == corev1.ConditionTrue {
+				return true, c.Type
+			}
+		}
+
+		return false, ""
+	}
+
+	getScheduledTimeForJob := func(job *batchv1.Job) (*time.Time, error) {
 		timeRaw := job.Annotations[scheduledTimeAnnotation]
 		if len(timeRaw) == 0 {
 			return nil, nil
@@ -76,21 +91,21 @@ func (r *RegistryReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
 		return &timeParsed, nil
 	}
 
-	var activeJobs, successfulJobs, failedJobs []*kbatch.Job
+	var activeJobs, successfulJobs []*batchv1.Job
 	var mostRecentTime *time.Time
 
 	for i, job := range childJobs.Items {
 		_, finishedType := isJobFinished(&job)
 
 		switch finishedType {
-		case kbatch.JobFailed:
+		case batchv1.JobFailed:
 			continue
 		case "":
 			activeJobs = append(activeJobs, &childJobs.Items[i])
 			successfulJobs = append(successfulJobs, &childJobs.Items[i])
 		}
 
-		scheduledTimeForJob, err := getScheduleTimeForJob(&job)
+		scheduledTimeForJob, err := getScheduledTimeForJob(&job)
 		if err != nil {
 			log.Error(err, "unable to parse schedule time for child job", "job", &job)
 			continue
@@ -99,7 +114,7 @@ func (r *RegistryReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
 		if scheduledTimeForJob != nil {
 			if mostRecentTime == nil {
 				mostRecentTime = scheduledTimeForJob
-			} else if mostRecentTime.Before(scheduledTimeForJob) {
+			} else if mostRecentTime.Before(*scheduledTimeForJob) {
 				mostRecentTime = scheduledTimeForJob
 			}
 		}
@@ -111,10 +126,15 @@ func (r *RegistryReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
 		registry.Status.LastRefreshTime = nil
 	}
 
-	registry.Status.Valid = false
+	TenHoursAgo := time.Now().Add(-time.Hour * time.Duration(10))
 
-	if err := r.Status().Update(ctx, &cronJob); err != nil {
-		log.Error(err, "unable to update CronJob status")
+	registry.Status.Valid = false
+	if registry.Status.LastRefreshTime.Time.Before(TenHoursAgo) {
+		registry.Status.Valid = true
+	}
+
+	if err := r.Status().Update(ctx, &registry); err != nil {
+		log.Error(err, "unable to update Registry status")
 		return ctrl.Result{}, err
 	}
 
