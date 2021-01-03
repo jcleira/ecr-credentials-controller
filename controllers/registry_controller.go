@@ -138,6 +138,34 @@ func (r *RegistryReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
 		return ctrl.Result{}, err
 	}
 
+	// Deleting old jobs, leaving the last one as reference.
+	if len(successfulJobs) > 1 {
+		sort.Slice(successfulJobs, func(i, j int) bool {
+			if successfulJobs[i].Status.LastRefreshTime == nil {
+				return successfulJobs[j].Status.LastRefreshTime != nil
+			}
+
+			return successfulJobs[i].Status.LastRefreshTime.Before(
+				successfulJobs[j].Status.LastRefreshTime,
+			)
+		})
+
+		for i, job := range successfulJobs {
+			if i+1 == len(successfulJobs) {
+				break
+			}
+
+			err := r.Delete(ctx, job,
+				client.PropagationPolicy(metav1.DeletePropagationBackground))
+			if err != nil {
+				log.Error(err, "unable to delete old successful job", "job", job)
+				continue
+			}
+
+			log.V(0).Info("deleted old successful job", "job", job)
+		}
+	}
+
 	return ctrl.Result{}, nil
 }
 
