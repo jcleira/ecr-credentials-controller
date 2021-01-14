@@ -91,17 +91,18 @@ func (r *RegistryReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
 		return &timeParsed, nil
 	}
 
-	var activeJobs, successfulJobs []*batchv1.Job
+	var activeJobs, successfulJobs, failedJobs []*batchv1.Job
 	var mostRecentTime *time.Time
 
 	for i, job := range childJobs.Items {
 		_, finishedType := isJobFinished(&job)
 
 		switch finishedType {
-		case batchv1.JobFailed:
-			continue
 		case "":
 			activeJobs = append(activeJobs, &childJobs.Items[i])
+		case batchv1.JobFailed:
+			continue
+		case kbatch.JobComplete:
 			successfulJobs = append(successfulJobs, &childJobs.Items[i])
 		}
 
@@ -136,6 +137,34 @@ func (r *RegistryReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
 	if err := r.Status().Update(ctx, &registry); err != nil {
 		log.Error(err, "unable to update Registry status")
 		return ctrl.Result{}, err
+	}
+
+	// Deleting old failed jobs, leaving the last one as reference.
+	if len(failedJobs) > 1 {
+		sort.Slice(failedJobs, func(i, j int) bool {
+			if failedJobs[i].Status.LastRefreshTime == nil {
+				return failedJobs[j].Status.LastRefreshTime != nil
+			}
+
+			return failedJobs[i].Status.LastRefreshTime.Before(
+				failedJobs[j].Status.LastRefreshTime,
+			)
+		})
+
+		for i, job := range failedJobs {
+			if i+1 == len(failedJobs) {
+				break
+			}
+
+			err := r.Delete(ctx, job,
+				client.PropagationPolicy(metav1.DeletePropagationBackground))
+			if err != nil {
+				log.Error(err, "unable to delete old successful job", "job", job)
+				continue
+			}
+
+			log.V(0).Info("deleted old successful job", "job", job)
+		}
 	}
 
 	// Deleting old jobs, leaving the last one as reference.
