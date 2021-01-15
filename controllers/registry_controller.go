@@ -18,6 +18,8 @@ package controllers
 
 import (
 	"context"
+	"fmt"
+	"sort"
 	"time"
 
 	"github.com/go-logr/logr"
@@ -102,7 +104,7 @@ func (r *RegistryReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
 			activeJobs = append(activeJobs, &childJobs.Items[i])
 		case batchv1.JobFailed:
 			continue
-		case kbatch.JobComplete:
+		case batchv1.JobComplete:
 			successfulJobs = append(successfulJobs, &childJobs.Items[i])
 		}
 
@@ -159,11 +161,11 @@ func (r *RegistryReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
 			err := r.Delete(ctx, job,
 				client.PropagationPolicy(metav1.DeletePropagationBackground))
 			if err != nil {
-				log.Error(err, "unable to delete old successful job", "job", job)
+				log.Error(err, "unable to delete old failed job", "job", job)
 				continue
 			}
 
-			log.V(0).Info("deleted old successful job", "job", job)
+			log.V(0).Info("deleted old failed job", "job", job)
 		}
 	}
 
@@ -195,6 +197,61 @@ func (r *RegistryReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
 		}
 	}
 
+	getNextSchedule := func(registry *awsv1.Registry, now time.Time) time.Time {
+		if registry.Status.LastRefreshTime != nil {
+			return registry.Status.LastRefreshTime.Time.Add(time.Hour * 10)
+		}
+
+		return registry.ObjectMeta.CreationTimestamp.Time
+	}
+
+	nextSchedule := getNextSchedule(registry, r.Now())
+
+	if nextSchedule.Before(now) {
+		return ctrl.Result{RequeueAfter: nextSchedule.Sub(r.Now())}, nil
+	}
+
+	buildJobforRegistry := func(
+		registry *awsv1.Registry, scheduledTime time.Time) (*kbatch.Job, error) {
+		// We want job names for a given nominal start time to have a
+		// deterministic name to avoid the same job being created twice.
+		name := fmt.Sprintf("%s-%d", registry.Name, scheduledTime.Unix())
+
+		job := &kbatch.Job{
+			ObjectMeta: metav1.ObjectMeta{
+				Labels:      make(map[string]string),
+				Annotations: make(map[string]string),
+				Name:        name,
+				Namespace:   registry.Namespace,
+			},
+			Spec: *registry.Spec.JobTemplate.Spec.DeepCopy(),
+		}
+		for k, v := range registry.Spec.JobTemplate.Annotations {
+			job.Annotations[k] = v
+		}
+		job.Annotations[scheduledTimeAnnotation] = scheduledTime.Format(time.RFC3339)
+		for k, v := range registry.Spec.JobTemplate.Labels {
+			job.Labels[k] = v
+		}
+		if err := ctrl.SetControllerReference(registry, job, r.Scheme); err != nil {
+			return nil, err
+		}
+
+		return job, nil
+	}
+
+	job, err := buildJobforRegistry(&registry, missedRun)
+	if err != nil {
+		log.Error(err, "unable to construct job from template")
+		return ctrl.Result{}, err
+	}
+
+	if err := r.Create(ctx, job); err != nil {
+		log.Error(err, "unable to create Job for Registry", "job", job)
+		return ctrl.Result{}, err
+	}
+
+	log.V(1).Info("created Job for Registry run", "job", job)
 	return ctrl.Result{}, nil
 }
 
