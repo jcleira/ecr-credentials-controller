@@ -245,9 +245,9 @@ func (r *RegistryReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
 					BackoffLimit:            3,
 					TTLSecondsAfterFinished: 500,
 				*/
-				Template: &v1.PodTemplateSpec{
-					Spec: &v1.PodSpec{
-						Containers: []Container{
+				Template: v1.PodTemplateSpec{
+					Spec: v1.PodSpec{
+						Containers: []v1.Container{
 							{
 								Name:            "ecr-registry-credentials",
 								Image:           "jcorral/awscli-kubectl",
@@ -317,9 +317,6 @@ func (r *RegistryReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
 		}
 
 		job.Annotations[scheduledTimeAnnotation] = scheduledTime.Format(time.RFC3339)
-		for k, v := range registry.Spec.JobTemplate.Labels {
-			job.Labels[k] = v
-		}
 
 		if err := ctrl.SetControllerReference(registry, job, r.Scheme); err != nil {
 			return nil, err
@@ -328,7 +325,7 @@ func (r *RegistryReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
 		return job, nil
 	}
 
-	job, err := buildJobforRegistry(&registry, missedRun)
+	job, err := buildJobforRegistry(&registry, nextSchedule)
 	if err != nil {
 		log.Error(err, "unable to construct job from template")
 		return ctrl.Result{}, err
