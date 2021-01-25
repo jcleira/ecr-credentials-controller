@@ -238,79 +238,74 @@ func (r *RegistryReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
 				Namespace:   registry.Namespace,
 			},
 			Spec: batchv1.JobSpec{
-				/*
-					Parallelism:             1,
-					Completions:             1,
-					ActiveDeadlineSeconds:   5,
-					BackoffLimit:            3,
-					TTLSecondsAfterFinished: 500,
-				*/
+				Parallelism:             int32Ptr(1),
+				Completions:             int32Ptr(1),
+				ActiveDeadlineSeconds:   int64Ptr(5),
+				BackoffLimit:            int32Ptr(3),
+				TTLSecondsAfterFinished: int32Ptr(500),
 				Template: v1.PodTemplateSpec{
 					Spec: v1.PodSpec{
 						Containers: []v1.Container{
 							{
 								Name:            "ecr-registry-credentials",
-								Image:           "jcorral/awscli-kubectl",
+								Image:           "jcorral/awscli-kubectl:latest",
 								ImagePullPolicy: "IfNotPresent",
+								Command: []string{
+									"bin/sh",
+									"-c",
+									"SECRET_NAME=${AWS_REGION}-ecr-registry-credentials",
+									"EMAIL=no@local.info",
+									"TOKEN=`aws ecr get-login-password --region ${AWS_REGION}`",
+									"kubectl delete secret --ignore-not-found ${SECRET_NAME}",
+									`kubectl create secret docker-registry ${SECRET_NAME}
+									 --docker-server=https://${AWS_ACCOUNT}.dkr.ecr.${AWS_REGION}.amazonaws.com
+									 --docker-username=AWS
+									 --docker-password="${TOKEN}"
+									 --docker-email="${EMAIL}"
+									`,
+									`kubectl patch sa default -p '{"imagePullSecrets":[{"name":"'${SECRET_NAME}'"}]}'`,
+								},
+								Env: []v1.EnvVar{
+									{
+										Name:  "AWS_REGION",
+										Value: "eu-west-1",
+									},
+									{
+										Name: "AWS_ACCOUNT",
+										ValueFrom: &v1.EnvVarSource{
+											SecretKeyRef: &v1.SecretKeySelector{
+												LocalObjectReference: v1.LocalObjectReference{
+													Name: "aws-credentials",
+												},
+												Key: "AWS_ACCOUNT",
+											},
+										},
+									},
+									{
+										Name: "AWS_ACCESS_KEY_ID",
+										ValueFrom: &v1.EnvVarSource{
+											SecretKeyRef: &v1.SecretKeySelector{
+												LocalObjectReference: v1.LocalObjectReference{
+													Name: "aws-credentials",
+												},
+												Key: "AWS_ACCESS_KEY_ID",
+											},
+										},
+									},
+									{
+										Name: "AWS_SECRET_ACCESS_KEY",
+										ValueFrom: &v1.EnvVarSource{
+											SecretKeyRef: &v1.SecretKeySelector{
+												LocalObjectReference: v1.LocalObjectReference{
+													Name: "aws-credentials",
+												},
+												Key: "AWS_SECRET_ACCESS_KEY",
+											},
+										},
+									},
+								},
 							},
 						},
-
-						/*
-							apiVersion: batch/v1beta1
-							kind: CronJob
-							metadata:
-								name: ecr-registry-credentials
-							spec:
-								concurrencyPolicy: Allow
-								failedJobsHistoryLimit: 1
-								jobTemplate:
-									spec:
-										template:
-											spec:
-												containers:
-												- name: ecr-registry-credentials
-													image: jcorral/awscli-kubectl:latest
-													imagePullPolicy: IfNotPresent
-													command:
-													- /bin/sh
-													- -c
-													- |-
-														SECRET_NAME=${AWS_REGION}-ecr-registry-credentials
-														EMAIL=no@local.info
-														TOKEN=`aws ecr get-login-password --region ${AWS_REGION}`
-														kubectl delete secret --ignore-not-found ${SECRET_NAME}
-														kubectl create secret docker-registry ${SECRET_NAME} \
-														--docker-server=https://${AWS_ACCOUNT}.dkr.ecr.${AWS_REGION}.amazonaws.com \
-														--docker-username=AWS \
-														--docker-password="${TOKEN}" \
-														--docker-email="${EMAIL}"
-														kubectl patch sa default -p '{"imagePullSecrets":[{"name":"'${SECRET_NAME}'"}]}'
-													env:
-													- name: AWS_REGION
-														value: eu-west-1
-													- name: AWS_ACCOUNT
-														valueFrom:
-															secretKeyRef:
-																name: aws-credentials
-																key: AWS_ACCOUNT
-													- name: AWS_ACCESS_KEY_ID
-														valueFrom:
-															secretKeyRef:
-																name: aws-credentials
-																key: AWS_ACCESS_KEY_ID
-													- name: AWS_SECRET_ACCESS_KEY
-														valueFrom:
-															secretKeyRef:
-																name: aws-credentials
-																key: AWS_SECRET_ACCESS_KEY
-												restartPolicy: Never
-												serviceAccount: ecr-registry-credentials
-												serviceAccountName: ecr-registry-credentials
-												terminationGracePeriodSeconds: 30
-												schedule: 0 *\/6 * * *
-												successfulJobsHistoryLimit: 3
-												suspend: false
-						*/
 					},
 				},
 			},
@@ -339,6 +334,9 @@ func (r *RegistryReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
 	log.V(1).Info("created Job for Registry run", "job", job)
 	return ctrl.Result{}, nil
 }
+
+func int32Ptr(i int32) *int32 { return &i }
+func int64Ptr(i int64) *int64 { return &i }
 
 func (r *RegistryReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
