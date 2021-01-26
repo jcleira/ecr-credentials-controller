@@ -338,8 +338,35 @@ func (r *RegistryReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
 func int32Ptr(i int32) *int32 { return &i }
 func int64Ptr(i int64) *int64 { return &i }
 
+var (
+	jobOwnerKey = ".metadata.controller"
+	apiGVStr    = awsv1.GroupVersion.String()
+)
+
 func (r *RegistryReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	if r.Clock == nil {
+		r.Clock = realClock{}
+	}
+
+	if err := mgr.GetFieldIndexer().IndexField(
+		&batchv1.Job{}, jobOwnerKey, func(rawObj runtime.Object) []string {
+			job := rawObj.(*batchv1.Job)
+			owner := metav1.GetControllerOf(job)
+			if owner == nil {
+				return nil
+			}
+
+			if owner.APIVersion != apiGVStr || owner.Kind != "Registry" {
+				return nil
+			}
+
+			return []string{owner.Name}
+		}); err != nil {
+		return err
+	}
+
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&awsv1.Registry{}).
+		Owns(&batchv1.Job{}).
 		Complete(r)
 }
