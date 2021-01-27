@@ -32,8 +32,6 @@ func (r *Registry) SetupWebhookWithManager(mgr ctrl.Manager) error {
 		Complete()
 }
 
-// EDIT THIS FILE!  THIS IS SCAFFOLDING FOR YOU TO OWN!
-
 // +kubebuilder:webhook:path=/mutate-aws-com-ederium-ecr-credentials-controller-v1-registry,mutating=true,failurePolicy=fail,groups=aws.com.ederium.ecr-credentials-controller,resources=registries,verbs=create;update,versions=v1,name=mregistry.kb.io
 
 var _ webhook.Defaulter = &Registry{}
@@ -41,11 +39,8 @@ var _ webhook.Defaulter = &Registry{}
 // Default implements webhook.Defaulter so a webhook will be registered for the type
 func (r *Registry) Default() {
 	registrylog.Info("default", "name", r.Name)
-
-	// TODO(user): fill in your defaulting logic.
 }
 
-// TODO(user): change verbs to "verbs=create;update;delete" if you want to enable deletion validation.
 // +kubebuilder:webhook:verbs=create;update,path=/validate-aws-com-ederium-ecr-credentials-controller-v1-registry,mutating=false,failurePolicy=fail,groups=aws.com.ederium.ecr-credentials-controller,resources=registries,versions=v1,name=vregistry.kb.io
 
 var _ webhook.Validator = &Registry{}
@@ -54,7 +49,13 @@ var _ webhook.Validator = &Registry{}
 func (r *Registry) ValidateCreate() error {
 	registrylog.Info("validate create", "name", r.Name)
 
-	// TODO(user): fill in your validation logic upon object creation.
+	errorList := r.ValidateRegistrySpec()
+	if len(allErrs) > 0 {
+		return apierrors.NewInvalid(
+			schema.GroupKind{Group: "aws.com.ederium.ecr-credentials-controller", Kind: "Registry"},
+			r.Name, errorList)
+	}
+
 	return nil
 }
 
@@ -62,7 +63,13 @@ func (r *Registry) ValidateCreate() error {
 func (r *Registry) ValidateUpdate(old runtime.Object) error {
 	registrylog.Info("validate update", "name", r.Name)
 
-	// TODO(user): fill in your validation logic upon object update.
+	errorList := r.ValidateRegistrySpec()
+	if len(allErrs) > 0 {
+		return apierrors.NewInvalid(
+			schema.GroupKind{Group: "aws.com.ederium.ecr-credentials-controller", Kind: "Registry"},
+			r.Name, errorList)
+	}
+
 	return nil
 }
 
@@ -72,4 +79,26 @@ func (r *Registry) ValidateDelete() error {
 
 	// TODO(user): fill in your validation logic upon object deletion.
 	return nil
+}
+
+func (r *Registry) ValidateRegistrySpec() (errorList field.ErrorList) {
+	if r.Spec.AWSZone == "" {
+		errorList = append(errorList,
+			field.Invalid(
+				field.NewPath("spec").Child("awsZone"),
+				r.Spec.AWSZone, errors.New("empty AWSZone"),
+			),
+		)
+	}
+
+	if r.Spec.AWSAccountSecret == "" {
+		errorList = append(errorList,
+			field.Invalid(
+				field.NewPath("spec").Child("awsZone"),
+				r.Spec.AWSZone, errors.New("empty AWSAccountSecret"),
+			),
+		)
+	}
+
+	return errorList
 }
