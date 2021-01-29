@@ -17,7 +17,11 @@ limitations under the License.
 package v1
 
 import (
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/util/validation/field"
+
 	ctrl "sigs.k8s.io/controller-runtime"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
@@ -50,7 +54,7 @@ func (r *Registry) ValidateCreate() error {
 	registrylog.Info("validate create", "name", r.Name)
 
 	errorList := r.ValidateRegistrySpec()
-	if len(allErrs) > 0 {
+	if len(errorList) > 0 {
 		return apierrors.NewInvalid(
 			schema.GroupKind{Group: "aws.com.ederium.ecr-credentials-controller", Kind: "Registry"},
 			r.Name, errorList)
@@ -64,7 +68,7 @@ func (r *Registry) ValidateUpdate(old runtime.Object) error {
 	registrylog.Info("validate update", "name", r.Name)
 
 	errorList := r.ValidateRegistrySpec()
-	if len(allErrs) > 0 {
+	if len(errorList) > 0 {
 		return apierrors.NewInvalid(
 			schema.GroupKind{Group: "aws.com.ederium.ecr-credentials-controller", Kind: "Registry"},
 			r.Name, errorList)
@@ -81,12 +85,17 @@ func (r *Registry) ValidateDelete() error {
 	return nil
 }
 
+const (
+	errorEmptyAWSZOne          = "empty AWS zone"
+	errorEmptyAWSAccountSecret = "empty AWS account secret"
+)
+
 func (r *Registry) ValidateRegistrySpec() (errorList field.ErrorList) {
 	if r.Spec.AWSZone == "" {
 		errorList = append(errorList,
 			field.Invalid(
 				field.NewPath("spec").Child("awsZone"),
-				r.Spec.AWSZone, errors.New("empty AWSZone"),
+				r.Spec.AWSZone, errorEmptyAWSZOne,
 			),
 		)
 	}
@@ -95,7 +104,7 @@ func (r *Registry) ValidateRegistrySpec() (errorList field.ErrorList) {
 		errorList = append(errorList,
 			field.Invalid(
 				field.NewPath("spec").Child("awsZone"),
-				r.Spec.AWSZone, errors.New("empty AWSAccountSecret"),
+				r.Spec.AWSZone, errorEmptyAWSAccountSecret,
 			),
 		)
 	}
