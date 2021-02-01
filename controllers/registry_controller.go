@@ -145,7 +145,8 @@ func (r *RegistryReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
 	TenHoursAgo := time.Now().Add(-time.Hour * time.Duration(10))
 
 	registry.Status.Valid = false
-	if registry.Status.LastRefreshTime.Time.Before(TenHoursAgo) {
+	if registry.Status.LastRefreshTime != nil &&
+		registry.Status.LastRefreshTime.Time.Before(TenHoursAgo) {
 		registry.Status.Valid = true
 	}
 

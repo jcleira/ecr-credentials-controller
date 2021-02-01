@@ -3,5 +3,5 @@ kind: Registry
 metadata:
   name: registry-sample
 spec:
-  # Add fields here
-  foo: bar
+  awsZone: eu-west-1
+  awsAccountSecret: aws-credentials
