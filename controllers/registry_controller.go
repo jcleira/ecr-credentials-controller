@@ -73,6 +73,8 @@ func (r *RegistryReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
+	log.V(1).Info("01")
+
 	var childJobs batchv1.JobList
 	if err := r.List(ctx,
 		&childJobs,
@@ -81,6 +83,8 @@ func (r *RegistryReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
 		log.Error(err, "unable to list child Jobs")
 		return ctrl.Result{}, err
 	}
+
+	log.V(1).Info("02", "childjobs", childJobs)
 
 	isJobFinished := func(job *batchv1.Job) (bool, batchv1.JobConditionType) {
 		for _, c := range job.Status.Conditions {
@@ -136,6 +140,9 @@ func (r *RegistryReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
 		}
 	}
 
+	log.V(1).Info("03", "activeJobs", activeJobs)
+	log.V(1).Info("0302", "mostRecentTime", mostRecentTime)
+
 	if mostRecentTime != nil {
 		registry.Status.LastRefreshTime = &metav1.Time{Time: *mostRecentTime}
 	} else {
@@ -149,6 +156,8 @@ func (r *RegistryReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
 		registry.Status.LastRefreshTime.Time.Before(TenHoursAgo) {
 		registry.Status.Valid = true
 	}
+
+	log.V(1).Info("04", "registry.Status", registry.Status)
 
 	if err := r.Status().Update(ctx, &registry); err != nil {
 		log.Error(err, "unable to update Registry status")
@@ -183,6 +192,8 @@ func (r *RegistryReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
 		}
 	}
 
+	log.V(1).Info("05", "failedJobs", failedJobs)
+
 	// Deleting old jobs, leaving the last one as reference.
 	if len(successfulJobs) > 1 {
 		sort.Slice(successfulJobs, func(i, j int) bool {
@@ -211,6 +222,8 @@ func (r *RegistryReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
 		}
 	}
 
+	log.V(1).Info("06", "successfulJobs", successfulJobs)
+
 	getNextSchedule := func(registry awsv1.Registry, now time.Time) time.Time {
 		if registry.Status.LastRefreshTime != nil {
 			return registry.Status.LastRefreshTime.Time.Add(time.Hour * 10)
@@ -221,7 +234,9 @@ func (r *RegistryReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
 
 	nextSchedule := getNextSchedule(registry, r.Now())
 
-	if nextSchedule.Before(r.Now()) {
+	log.V(1).Info("07", "nextSchedule", nextSchedule)
+
+	if nextSchedule.After(r.Now()) {
 		return ctrl.Result{RequeueAfter: nextSchedule.Sub(r.Now())}, nil
 	}
 
@@ -246,6 +261,7 @@ func (r *RegistryReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
 				TTLSecondsAfterFinished: int32Ptr(500),
 				Template: v1.PodTemplateSpec{
 					Spec: v1.PodSpec{
+						RestartPolicy: v1.RestartPolicyNever,
 						Containers: []v1.Container{
 							{
 								Name:            "ecr-registry-credentials",
@@ -327,10 +343,14 @@ func (r *RegistryReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
 		return ctrl.Result{}, err
 	}
 
+	log.V(1).Info("08", "job", job)
+
 	if err := r.Create(ctx, job); err != nil {
 		log.Error(err, "unable to create Job for Registry", "job", job)
 		return ctrl.Result{}, err
 	}
+
+	log.V(1).Info("09", "job", job)
 
 	log.V(1).Info("created Job for Registry run", "job", job)
 	return ctrl.Result{}, nil
