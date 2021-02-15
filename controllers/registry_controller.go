@@ -268,7 +268,7 @@ func (r *RegistryReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
 								Image:           "jcorral/awscli-kubectl:latest",
 								ImagePullPolicy: "IfNotPresent",
 								Command: []string{
-									"bin/sh",
+									"/bin/sh",
 									"-c",
 									"SECRET_NAME=${AWS_REGION}-ecr-registry-credentials",
 									"EMAIL=no@local.info",
