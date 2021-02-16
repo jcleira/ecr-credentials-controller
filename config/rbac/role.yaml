@@ -6,6 +6,26 @@ metadata:
   creationTimestamp: null
   name: manager-role
 rules:
+- resources:
+  - pod
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- resources:
+  - secret
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
 - apiGroups:
   - aws.com.ederium.ecr-credentials-controller
   resources:
