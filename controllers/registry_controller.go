@@ -118,11 +118,13 @@ func (r *RegistryReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
 	for i, job := range childJobs.Items {
 		_, finishedType := isJobFinished(&job)
 
+		log.V(1).Info("0201", "finishedType", finishedType)
+
 		switch finishedType {
 		case "":
 			activeJobs = append(activeJobs, &childJobs.Items[i])
 		case batchv1.JobFailed:
-			continue
+			failedJobs = append(failedJobs, &childJobs.Items[i])
 		case batchv1.JobComplete:
 			successfulJobs = append(successfulJobs, &childJobs.Items[i])
 		}
@@ -143,9 +145,11 @@ func (r *RegistryReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
 	}
 
 	log.V(1).Info("03", "activeJobs", activeJobs)
-	log.V(1).Info("0302", "mostRecentTime", mostRecentTime)
+	log.V(1).Info("0301", "successfulJobs", successfulJobs)
+	log.V(1).Info("0302", "failedJobs", failedJobs)
 
 	if mostRecentTime != nil {
+		log.V(1).Info("0303", "mostRecentTime", mostRecentTime)
 		registry.Status.LastRefreshTime = &metav1.Time{Time: *mostRecentTime}
 	} else {
 		registry.Status.LastRefreshTime = nil
