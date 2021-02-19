@@ -61,8 +61,8 @@ var (
 // +kubebuilder:rbac:groups=aws.com.ederium.ecr-credentials-controller,resources=registries/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=batch,resources=jobs,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=batch,resources=jobs/status,verbs=get
-// +kubebuilder:rbac:groups=,resources=secret,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=,resources=pod,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=,resources=secrets,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=,resources=pods,verbs=get;list;watch;create;update;patch;delete
 
 func (r *RegistryReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
 	ctx := context.Background()
@@ -262,7 +262,7 @@ func (r *RegistryReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
 			Spec: batchv1.JobSpec{
 				Parallelism:             int32Ptr(1),
 				Completions:             int32Ptr(1),
-				ActiveDeadlineSeconds:   int64Ptr(5),
+				ActiveDeadlineSeconds:   int64Ptr(100),
 				BackoffLimit:            int32Ptr(3),
 				TTLSecondsAfterFinished: int32Ptr(500),
 				Template: v1.PodTemplateSpec{
@@ -276,17 +276,19 @@ func (r *RegistryReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
 								Command: []string{
 									"/bin/sh",
 									"-c",
-									"SECRET_NAME=${AWS_REGION}-ecr-registry-credentials",
-									"EMAIL=no@local.info",
-									"TOKEN=`aws ecr get-login-password --region ${AWS_REGION}`",
-									"kubectl get po",
-									"kubectl delete secret --ignore-not-found ${SECRET_NAME}",
-									`kubectl create secret docker-registry ${SECRET_NAME} \
+									`
+									SECRET_NAME=${AWS_REGION}-ecr-registry-credentials
+									EMAIL=no@local.info
+									TOKEN="aws ecr get-login-password --region ${AWS_REGION}"
+									kubectl get po
+									kubectl delete secret --ignore-not-found ${SECRET_NAME}
+									kubectl create secret docker-registry ${SECRET_NAME} \
 									 --docker-server=https://${AWS_ACCOUNT}.dkr.ecr.${AWS_REGION}.amazonaws.com \
 									 --docker-username=AWS \
 									 --docker-password="${TOKEN}" \
-									 --docker-email="${EMAIL}"`,
-									`kubectl patch sa default -p '{"imagePullSecrets":[{"name":"'${SECRET_NAME}'"}]}'`,
+									 --docker-email="${EMAIL}
+									kubectl patch sa default -p '{"imagePullSecrets":[{"name":"'${SECRET_NAME}'"}]}'
+									`,
 								},
 								Env: []v1.EnvVar{
 									{

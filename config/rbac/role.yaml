@@ -7,7 +7,7 @@ metadata:
   name: manager-role
 rules:
 - resources:
-  - pod
+  - pods
   verbs:
   - create
   - delete
@@ -17,7 +17,7 @@ rules:
   - update
   - watch
 - resources:
-  - secret
+  - secrets
   verbs:
   - create
   - delete
