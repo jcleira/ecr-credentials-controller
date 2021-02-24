@@ -28,11 +28,14 @@ import (
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	awsv1 "github.com/jcleira/ecr-credentials-controller/api/v1"
 )
+
+const dockerCredentialsSecretName = "docker-registry"
 
 // clock knows how to get the current time.
 // It can be used to fake out timing for testing.
@@ -244,6 +247,23 @@ func (r *RegistryReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
 
 	if nextSchedule.After(r.Now()) {
 		return ctrl.Result{RequeueAfter: nextSchedule.Sub(r.Now())}, nil
+	}
+
+	secret := &corev1.Secret{}
+	err := r.Client.Get(ctx, types.NamespacedName{
+		Name:      dockerCredentialsSecretName,
+		Namespace: registry.Namespace,
+	}, secret)
+	if err != nil {
+		log.Error(err, "unable to get docker credentials secret")
+		return ctrl.Result{}, err
+	}
+
+	err = r.Delete(ctx, secret,
+		client.PropagationPolicy(metav1.DeletePropagationBackground))
+	if err != nil {
+		log.Error(err, "unable to delete old auth secret", "secret", secret)
+		return ctrl.Result{}, err
 	}
 
 	buildJobforRegistry := func(
