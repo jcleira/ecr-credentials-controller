@@ -26,6 +26,7 @@ import (
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	v1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -255,15 +256,24 @@ func (r *RegistryReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
 		Namespace: registry.Namespace,
 	}, secret)
 	if err != nil {
-		log.Error(err, "unable to get docker credentials secret")
-		return ctrl.Result{}, err
+		// We check for "Object not found". This can happens if it's a first-time
+		// initialization, if the error is different than IsNotFound we fail, but
+		// we will continue (and log) if we don't find the secret.
+		if !apierrors.IsNotFound(err) {
+			return ctrl.Result{}, err
+		}
+
+		log.V(1).Info("docker-credentials secret not found, it could be a first-time registry")
 	}
 
-	err = r.Delete(ctx, secret,
-		client.PropagationPolicy(metav1.DeletePropagationBackground))
-	if err != nil {
-		log.Error(err, "unable to delete old auth secret", "secret", secret)
-		return ctrl.Result{}, err
+	// We do this comparision to check if the docker credentials secret was found.
+	if secret.Name == dockerCredentialsSecretName {
+		err = r.Delete(ctx, secret,
+			client.PropagationPolicy(metav1.DeletePropagationBackground))
+		if err != nil {
+			log.Error(err, "unable to delete old auth secret", "secret", secret)
+			return ctrl.Result{}, err
+		}
 	}
 
 	buildJobforRegistry := func(
