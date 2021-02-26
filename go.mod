@@ -3,6 +3,7 @@ module github.com/jcleira/ecr-credentials-controller
 go 1.13
 
 require (
+	github.com/aws/aws-sdk-go v1.37.19
 	github.com/go-logr/logr v0.1.0
 	github.com/juju/errors v0.0.0-20200330140219-3fe23663418f
 	github.com/onsi/ginkgo v1.11.0

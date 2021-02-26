@@ -22,6 +22,10 @@ import (
 	"sort"
 	"time"
 
+	"github.com/aws/aws-sdk-go/aws"
+	"github.com/aws/aws-sdk-go/aws/session"
+	"github.com/aws/aws-sdk-go/service/ecr"
+
 	"github.com/go-logr/logr"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -276,6 +280,43 @@ func (r *RegistryReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
 		}
 	}
 
+	/*
+		sess, err := session.NewSession(&aws.Config{
+			Region: aws.String("eu-west-1"),
+			Credentials: credentials.NewStaticCredentials(
+				"AKID",
+				"SECRET_KEY",
+				"TOKEN"),
+		})
+	*/
+
+	svc := ecr.New(
+		session.New(&aws.Config{
+			Region: aws.String("eu-west-1"),
+		}),
+	)
+
+	result, err := svc.GetAuthorizationToken(
+		&ecr.GetAuthorizationTokenInput{},
+	)
+	if err != nil {
+		log.Error(err, "unable to get AWS ECR auth token", "result", result)
+		return ctrl.Result{}, err
+	}
+
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "pull-image-secret",
+			Namespace: "aaaaaa",
+		},
+		Type: "kubernetes.io/dockerconfigjson",
+		Data: map[string][]byte{".dockerconfigjson": base64EncodedData},
+	}
+	if err := r.Create(ctx, secret); err != nil {
+		log.Error(err, "unable to docker registry secret", "secret", secret)
+		return ctrl.Result{}, err
+	}
+
 	buildJobforRegistry := func(
 		registry *awsv1.Registry, scheduledTime time.Time) (*batchv1.Job, error) {
 		// We want job names for a given nominal start time to have a
@@ -310,8 +351,6 @@ func (r *RegistryReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
 									SECRET_NAME=${AWS_REGION}-ecr-registry-credentials
 									EMAIL=no@local.info
 									TOKEN="aws ecr get-login-password --region ${AWS_REGION}"
-									kubectl get po
-									kubectl delete secret --ignore-not-found ${SECRET_NAME}
 									kubectl create secret docker-registry ${SECRET_NAME} \
 									 --docker-server=https://${AWS_ACCOUNT}.dkr.ecr.${AWS_REGION}.amazonaws.com \
 									 --docker-username=AWS \
