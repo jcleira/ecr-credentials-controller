@@ -18,7 +18,7 @@ package controllers
 
 import (
 	"context"
-	"fmt"
+	"encoding/json"
 	"sort"
 	"time"
 
@@ -29,7 +29,6 @@ import (
 	"github.com/go-logr/logr"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
-	v1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -40,7 +39,12 @@ import (
 	awsv1 "github.com/jcleira/ecr-credentials-controller/api/v1"
 )
 
-const dockerCredentialsSecretName = "docker-registry"
+const (
+	dockerConfigJSONType = "kubernetes.io/dockerconfigjson"
+	dockerConfigJSONKey  = ".dockerconfigjson"
+
+	dockerCredentialsSecretName = "docker-registry"
+)
 
 // clock knows how to get the current time.
 // It can be used to fake out timing for testing.
@@ -296,140 +300,53 @@ func (r *RegistryReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
 		}),
 	)
 
-	result, err := svc.GetAuthorizationToken(
+	ecrAuth, err := svc.GetAuthorizationToken(
 		&ecr.GetAuthorizationTokenInput{},
 	)
 	if err != nil {
-		log.Error(err, "unable to get AWS ECR auth token", "result", result)
+		log.Error(err, "unable to get AWS ECR auth token", "ecrAuth", ecrAuth)
 		return ctrl.Result{}, err
 	}
 
-	secret := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "pull-image-secret",
-			Namespace: "aaaaaa",
+	if len(ecrAuth.AuthorizationData) == 0 {
+		log.Error(err, "AWS ECR auth response doesn't contain auth data")
+		return ctrl.Result{}, err
+	}
+
+	if ecrAuth.AuthorizationData[0].AuthorizationToken == nil {
+		log.Error(err, "AWS ECR auth response has a nill authorization token")
+		return ctrl.Result{}, err
+	}
+
+	dockerConfigJSON := map[string]interface{}{
+		"auths": map[string]interface{}{
+			"https://index.docker.io/v1/": map[string]interface{}{
+				"auth": *ecrAuth.AuthorizationData[0].AuthorizationToken,
+			},
 		},
-		Type: "kubernetes.io/dockerconfigjson",
-		Data: map[string][]byte{".dockerconfigjson": base64EncodedData},
+	}
+
+	dockerConfigJSONBytes, err := json.Marshal(dockerConfigJSON)
+	if err != nil {
+		log.Error(err, "unable to json.Marshal on docker config JSON")
+		return ctrl.Result{}, err
+	}
+
+	secret = &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      dockerCredentialsSecretName,
+			Namespace: registry.Namespace,
+		},
+		Type: dockerConfigJSONType,
+		Data: map[string][]byte{dockerConfigJSONKey: dockerConfigJSONBytes},
 	}
 	if err := r.Create(ctx, secret); err != nil {
-		log.Error(err, "unable to docker registry secret", "secret", secret)
+		log.Error(err, "unable to create docker registry secret", "secret", secret)
 		return ctrl.Result{}, err
 	}
 
-	buildJobforRegistry := func(
-		registry *awsv1.Registry, scheduledTime time.Time) (*batchv1.Job, error) {
-		// We want job names for a given nominal start time to have a
-		// deterministic name to avoid the same job being created twice.
-		name := fmt.Sprintf("%s-%d", registry.Name, scheduledTime.Unix())
+	log.V(1).Info("09", "secret created", secret)
 
-		job := &batchv1.Job{
-			ObjectMeta: metav1.ObjectMeta{
-				Labels:      make(map[string]string),
-				Annotations: make(map[string]string),
-				Name:        name,
-				Namespace:   registry.Namespace,
-			},
-			Spec: batchv1.JobSpec{
-				Parallelism:             int32Ptr(1),
-				Completions:             int32Ptr(1),
-				ActiveDeadlineSeconds:   int64Ptr(100),
-				BackoffLimit:            int32Ptr(3),
-				TTLSecondsAfterFinished: int32Ptr(500),
-				Template: v1.PodTemplateSpec{
-					Spec: v1.PodSpec{
-						RestartPolicy: v1.RestartPolicyNever,
-						Containers: []v1.Container{
-							{
-								Name:            "ecr-registry-credentials",
-								Image:           "jcorral/awscli-kubectl:latest",
-								ImagePullPolicy: "IfNotPresent",
-								Command: []string{
-									"/bin/sh",
-									"-c",
-									`
-									SECRET_NAME=${AWS_REGION}-ecr-registry-credentials
-									EMAIL=no@local.info
-									TOKEN="aws ecr get-login-password --region ${AWS_REGION}"
-									kubectl create secret docker-registry ${SECRET_NAME} \
-									 --docker-server=https://${AWS_ACCOUNT}.dkr.ecr.${AWS_REGION}.amazonaws.com \
-									 --docker-username=AWS \
-									 --docker-password="${TOKEN}" \
-									 --docker-email="${EMAIL}
-									kubectl patch sa default -p '{"imagePullSecrets":[{"name":"'${SECRET_NAME}'"}]}'
-									`,
-								},
-								Env: []v1.EnvVar{
-									{
-										Name:  "AWS_REGION",
-										Value: "eu-west-1",
-									},
-									{
-										Name: "AWS_ACCOUNT",
-										ValueFrom: &v1.EnvVarSource{
-											SecretKeyRef: &v1.SecretKeySelector{
-												LocalObjectReference: v1.LocalObjectReference{
-													Name: "aws-credentials",
-												},
-												Key: "AWS_ACCOUNT",
-											},
-										},
-									},
-									{
-										Name: "AWS_ACCESS_KEY_ID",
-										ValueFrom: &v1.EnvVarSource{
-											SecretKeyRef: &v1.SecretKeySelector{
-												LocalObjectReference: v1.LocalObjectReference{
-													Name: "aws-credentials",
-												},
-												Key: "AWS_ACCESS_KEY_ID",
-											},
-										},
-									},
-									{
-										Name: "AWS_SECRET_ACCESS_KEY",
-										ValueFrom: &v1.EnvVarSource{
-											SecretKeyRef: &v1.SecretKeySelector{
-												LocalObjectReference: v1.LocalObjectReference{
-													Name: "aws-credentials",
-												},
-												Key: "AWS_SECRET_ACCESS_KEY",
-											},
-										},
-									},
-								},
-							},
-						},
-					},
-				},
-			},
-		}
-
-		job.Annotations[scheduledTimeAnnotation] = scheduledTime.Format(time.RFC3339)
-
-		if err := ctrl.SetControllerReference(registry, job, r.Scheme); err != nil {
-			return nil, err
-		}
-
-		return job, nil
-	}
-
-	job, err := buildJobforRegistry(&registry, nextSchedule)
-	if err != nil {
-		log.Error(err, "unable to construct job from template")
-		return ctrl.Result{}, err
-	}
-
-	log.V(1).Info("08", "job", job)
-
-	if err := r.Create(ctx, job); err != nil {
-		log.Error(err, "unable to create Job for Registry", "job", job)
-		return ctrl.Result{}, err
-	}
-
-	log.V(1).Info("09", "job", job)
-
-	log.V(1).Info("created Job for Registry run", "job", job)
 	return ctrl.Result{}, nil
 }
 
