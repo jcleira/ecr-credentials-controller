@@ -87,8 +87,6 @@ func (r *RegistryReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
-	log.V(1).Info("01")
-
 	var childJobs batchv1.JobList
 	if err := r.List(ctx,
 		&childJobs,
@@ -97,8 +95,6 @@ func (r *RegistryReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
 		log.Error(err, "unable to list child Jobs")
 		return ctrl.Result{}, err
 	}
-
-	log.V(1).Info("02", "childjobs", childJobs)
 
 	isJobFinished := func(job *batchv1.Job) (bool, batchv1.JobConditionType) {
 		for _, c := range job.Status.Conditions {
