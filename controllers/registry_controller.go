@@ -19,7 +19,6 @@ package controllers
 import (
 	"context"
 	"encoding/json"
-	"sort"
 	"time"
 
 	"github.com/aws/aws-sdk-go/aws"
@@ -66,7 +65,7 @@ type RegistryReconciler struct {
 }
 
 var (
-	scheduledTimeAnnotation = "ecr-credentials-controller/scheduled-at"
+	lastRefresAtAnnotation = "ecr-credentials-controller/last-refresh-at"
 )
 
 // +kubebuilder:rbac:groups=aws.com.ederium.ecr-credentials-controller,resources=registries,verbs=get;list;watch;create;update;patch;delete
@@ -87,28 +86,17 @@ func (r *RegistryReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
-	var childJobs batchv1.JobList
+	var childSecrets corev1.SecretList
 	if err := r.List(ctx,
-		&childJobs,
+		&childSecrets,
 		client.InNamespace(req.Namespace),
 		client.MatchingFields{".metadata.controller": req.Name}); err != nil {
-		log.Error(err, "unable to list child Jobs")
+		log.Error(err, "unable to list child secrets")
 		return ctrl.Result{}, err
 	}
 
-	isJobFinished := func(job *batchv1.Job) (bool, batchv1.JobConditionType) {
-		for _, c := range job.Status.Conditions {
-			if (c.Type == batchv1.JobComplete || c.Type == batchv1.JobFailed) &&
-				c.Status == corev1.ConditionTrue {
-				return true, c.Type
-			}
-		}
-
-		return false, ""
-	}
-
-	getScheduledTimeForJob := func(job *batchv1.Job) (*time.Time, error) {
-		timeRaw := job.Annotations[scheduledTimeAnnotation]
+	getSecretTime := func(secret corev1.Secret) (*time.Time, error) {
+		timeRaw := secret.Annotations[lastRefresAtAnnotation]
 		if len(timeRaw) == 0 {
 			return nil, nil
 		}
@@ -120,123 +108,31 @@ func (r *RegistryReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
 		return &timeParsed, nil
 	}
 
-	var activeJobs, successfulJobs, failedJobs []*batchv1.Job
-	var mostRecentTime *time.Time
+	var secretLastRefreshTime *time.Time
 
-	for i, job := range childJobs.Items {
-		_, finishedType := isJobFinished(&job)
-
-		log.V(1).Info("0201", "finishedType", finishedType)
-
-		switch finishedType {
-		case "":
-			activeJobs = append(activeJobs, &childJobs.Items[i])
-		case batchv1.JobFailed:
-			failedJobs = append(failedJobs, &childJobs.Items[i])
-		case batchv1.JobComplete:
-			successfulJobs = append(successfulJobs, &childJobs.Items[i])
-		}
-
-		scheduledTimeForJob, err := getScheduledTimeForJob(&job)
+	for _, secret := range childSecrets.Items {
+		var err error
+		secretLastRefreshTime, err = getSecretTime(secret)
 		if err != nil {
-			log.Error(err, "unable to parse schedule time for child job", "job", &job)
-			continue
-		}
-
-		if scheduledTimeForJob != nil {
-			if mostRecentTime == nil {
-				mostRecentTime = scheduledTimeForJob
-			} else if mostRecentTime.Before(*scheduledTimeForJob) {
-				mostRecentTime = scheduledTimeForJob
-			}
+			return ctrl.Result{}, err
 		}
 	}
-
-	log.V(1).Info("03", "activeJobs", activeJobs)
-	log.V(1).Info("0301", "successfulJobs", successfulJobs)
-	log.V(1).Info("0302", "failedJobs", failedJobs)
-
-	if mostRecentTime != nil {
-		log.V(1).Info("0303", "mostRecentTime", mostRecentTime)
-		registry.Status.LastRefreshTime = &metav1.Time{Time: *mostRecentTime}
-	} else {
-		registry.Status.LastRefreshTime = nil
-	}
-
-	TenHoursAgo := time.Now().Add(-time.Hour * time.Duration(10))
 
 	registry.Status.Valid = false
-	if registry.Status.LastRefreshTime != nil &&
-		registry.Status.LastRefreshTime.Time.Before(TenHoursAgo) {
-		registry.Status.Valid = true
-	}
+	registry.Status.LastRefreshTime = nil
+	if secretLastRefreshTime != nil {
+		registry.Status.LastRefreshTime = &metav1.Time{Time: *secretLastRefreshTime}
 
-	log.V(1).Info("04", "registry.Status", registry.Status)
+		TenHoursAgo := time.Now().Add(-time.Hour * time.Duration(10))
+		if registry.Status.LastRefreshTime.Time.Before(TenHoursAgo) {
+			registry.Status.Valid = true
+		}
+	}
 
 	if err := r.Status().Update(ctx, &registry); err != nil {
 		log.Error(err, "unable to update Registry status")
 		return ctrl.Result{}, err
 	}
-
-	// Deleting old failed jobs, leaving the last one as reference.
-	if len(failedJobs) > 1 {
-		sort.Slice(failedJobs, func(i, j int) bool {
-			if failedJobs[i].Status.StartTime == nil {
-				return failedJobs[j].Status.StartTime != nil
-			}
-
-			return failedJobs[i].Status.StartTime.Before(
-				failedJobs[j].Status.StartTime,
-			)
-		})
-
-		for i, job := range failedJobs {
-			if i+1 == len(failedJobs) {
-				break
-			}
-
-			err := r.Delete(ctx, job,
-				client.PropagationPolicy(metav1.DeletePropagationBackground))
-			if err != nil {
-				log.Error(err, "unable to delete old failed job", "job", job)
-				continue
-			}
-
-			log.V(0).Info("deleted old failed job", "job", job)
-		}
-	}
-
-	log.V(1).Info("05", "failedJobs", failedJobs)
-
-	// Deleting old jobs, leaving the last one as reference.
-	if len(successfulJobs) > 1 {
-		sort.Slice(successfulJobs, func(i, j int) bool {
-			if successfulJobs[i].Status.StartTime == nil {
-				return successfulJobs[j].Status.StartTime != nil
-			}
-
-			return successfulJobs[i].Status.StartTime.Before(
-				successfulJobs[j].Status.StartTime,
-			)
-		})
-
-		for i, job := range successfulJobs {
-			if i+1 == len(successfulJobs) {
-				break
-			}
-
-			err := r.Delete(ctx, job,
-				client.PropagationPolicy(metav1.DeletePropagationBackground))
-			if err != nil {
-				log.Error(err, "unable to delete old successful job", "job", job)
-				continue
-			}
-
-			log.V(0).Info("deleted old successful job", "job", job)
-		}
-	}
-
-	log.V(1).Info("06", "successfulJobs", successfulJobs)
 
 	getNextSchedule := func(registry awsv1.Registry, now time.Time) time.Time {
 		if registry.Status.LastRefreshTime != nil {
@@ -247,8 +143,6 @@ func (r *RegistryReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
 	}
 
 	nextSchedule := getNextSchedule(registry, r.Now())
-
-	log.V(1).Info("07", "nextSchedule", nextSchedule)
 
 	if nextSchedule.After(r.Now()) {
 		return ctrl.Result{RequeueAfter: nextSchedule.Sub(r.Now())}, nil
@@ -336,6 +230,10 @@ func (r *RegistryReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
 		Type: dockerConfigJSONType,
 		Data: map[string][]byte{dockerConfigJSONKey: dockerConfigJSONBytes},
 	}
+	if err := ctrl.SetControllerReference(&registry, secret, r.Scheme); err != nil {
+		return ctrl.Result{}, err
+	}
+
 	if err := r.Create(ctx, secret); err != nil {
 		log.Error(err, "unable to create docker registry secret", "secret", secret)
 		return ctrl.Result{}, err
