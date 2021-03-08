@@ -26,7 +26,6 @@ import (
 	"github.com/aws/aws-sdk-go/service/ecr"
 
 	"github.com/go-logr/logr"
-	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -143,7 +142,6 @@ func (r *RegistryReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
 	}
 
 	nextSchedule := getNextSchedule(registry, r.Now())
-
 	if nextSchedule.After(r.Now()) {
 		return ctrl.Result{RequeueAfter: nextSchedule.Sub(r.Now())}, nil
 	}
@@ -224,12 +222,16 @@ func (r *RegistryReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
 
 	secret = &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      dockerCredentialsSecretName,
-			Namespace: registry.Namespace,
+			Name:        dockerCredentialsSecretName,
+			Annotations: make(map[string]string),
+			Namespace:   registry.Namespace,
 		},
 		Type: dockerConfigJSONType,
 		Data: map[string][]byte{dockerConfigJSONKey: dockerConfigJSONBytes},
 	}
+
+	secret.Annotations[lastRefresAtAnnotation] = time.Now().Format(time.RFC3339)
+
 	if err := ctrl.SetControllerReference(&registry, secret, r.Scheme); err != nil {
 		return ctrl.Result{}, err
 	}
@@ -238,8 +240,6 @@ func (r *RegistryReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
 		log.Error(err, "unable to create docker registry secret", "secret", secret)
 		return ctrl.Result{}, err
 	}
-
-	log.V(1).Info("09", "secret created", secret)
 
 	return ctrl.Result{}, nil
 }
@@ -258,9 +258,9 @@ func (r *RegistryReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	}
 
 	if err := mgr.GetFieldIndexer().IndexField(
-		&batchv1.Job{}, jobOwnerKey, func(rawObj runtime.Object) []string {
-			job := rawObj.(*batchv1.Job)
-			owner := metav1.GetControllerOf(job)
+		&corev1.Secret{}, jobOwnerKey, func(rawObj runtime.Object) []string {
+			secret := rawObj.(*corev1.Secret)
+			owner := metav1.GetControllerOf(secret)
 			if owner == nil {
 				return nil
 			}
@@ -276,6 +276,6 @@ func (r *RegistryReconciler) SetupWithManager(mgr ctrl.Manager) error {
 
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&awsv1.Registry{}).
-		Owns(&batchv1.Job{}).
+		Owns(&corev1.Secret{}).
 		Complete(r)
 }
