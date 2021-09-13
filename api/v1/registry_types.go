@@ -40,6 +40,7 @@ type RegistryStatus struct {
 }
 
 // +kubebuilder:object:root=true
+// +kubebuilder:subresource:status
 
 // Registry is the Schema for the registries API
 type Registry struct {
