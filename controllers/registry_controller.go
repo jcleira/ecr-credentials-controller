@@ -21,9 +21,9 @@ import (
 	"encoding/json"
 	"time"
 
-	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/aws/session"
-	"github.com/aws/aws-sdk-go/service/ecr"
+	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/credentials"
+	"github.com/aws/aws-sdk-go-v2/service/ecr"
 
 	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
@@ -42,6 +42,7 @@ const (
 	dockerConfigJSONKey  = ".dockerconfigjson"
 
 	dockerCredentialsSecretName = "docker-registry"
+	awsCredentialsSecretName    = "aws-credentials"
 )
 
 // clock knows how to get the current time.
@@ -146,12 +147,33 @@ func (r *RegistryReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
 		return ctrl.Result{RequeueAfter: nextSchedule.Sub(r.Now())}, nil
 	}
 
+	awsSecret := &corev1.Secret{}
+	if err := r.Client.Get(ctx, types.NamespacedName{
+		Name:      awsCredentialsSecretName,
+		Namespace: registry.Namespace,
+	}, awsSecret); err != nil {
+		log.Error(err, "aws credentials secret not found")
+		return ctrl.Result{}, err
+	}
+
+	awsConfig, err := config.LoadDefaultConfig(ctx,
+		config.WithRegion(string(awsSecret.Data["AWS_REGION"])),
+		config.WithCredentialsProvider(
+			credentials.NewStaticCredentialsProvider(
+				string(awsSecret.Data["AWS_ACCESS_KEY_ID"]),
+				string(awsSecret.Data["AWS_SECRET_ACCESS_KEY"]), "")),
+	)
+	if err != nil {
+		log.Error(err, "unable to load AWS config", err)
+	}
+
+	ecrService := ecr.NewFromConfig(awsConfig)
+
 	secret := &corev1.Secret{}
-	err := r.Client.Get(ctx, types.NamespacedName{
+	if err := r.Client.Get(ctx, types.NamespacedName{
 		Name:      dockerCredentialsSecretName,
 		Namespace: registry.Namespace,
-	}, secret)
-	if err != nil {
+	}, secret); err != nil {
 		// We check for "Object not found". This can happens if it's a first-time
 		// initialization, if the error is different than IsNotFound we fail, but
 		// we will continue (and log) if we don't find the secret.
@@ -172,23 +194,7 @@ func (r *RegistryReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
 		}
 	}
 
-	/*
-		sess, err := session.NewSession(&aws.Config{
-			Region: aws.String("eu-west-1"),
-			Credentials: credentials.NewStaticCredentials(
-				"AKID",
-				"SECRET_KEY",
-				"TOKEN"),
-		})
-	*/
-
-	svc := ecr.New(
-		session.New(&aws.Config{
-			Region: aws.String("eu-west-1"),
-		}),
-	)
-
-	ecrAuth, err := svc.GetAuthorizationToken(
+	ecrAuth, err := ecrService.GetAuthorizationToken(ctx,
 		&ecr.GetAuthorizationTokenInput{},
 	)
 	if err != nil {
